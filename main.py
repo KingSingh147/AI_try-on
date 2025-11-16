@@ -1,95 +1,74 @@
 import os
-import io
-import logging
 import requests
-import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters
-from huggingface_hub import InferenceClient
-from PIL import Image
-
-logging.basicConfig(level=logging.INFO)
+from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Render URL + /webhook
 
-STAGE_CLOTH, STAGE_MODEL = range(2)
+STAGE_PRODUCT, STAGE_MODEL = range(2)
 user_state = {}
 
-bot = Bot(token=TELEGRAM_TOKEN)
-app = FastAPI()
+HF_API_URL = "https://api-inference.huggingface.co/models/ovi054/virtual-tryon-kontext-lora"
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+bot = Bot(TELEGRAM_TOKEN)
 application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# HuggingFace client (fal-ai provider)
-client = InferenceClient(
-    provider="fal-ai",
-    api_key=HF_TOKEN
-)
+app = FastAPI()
 
 
-async def start(update, context):
-    user_state[update.message.chat_id] = {}
-    await update.message.reply_text("Upload CLOTH image 👕")
-    return STAGE_CLOTH
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_state[update.effective_chat.id] = {}
+    await update.message.reply_text("📌 Step 1: Upload the CLOTH image")
+    return STAGE_PRODUCT
 
 
-async def get_cloth(update, context):
+async def get_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = await update.message.photo[-1].get_file()
-    path = f"cloth_{update.message.chat_id}.png"
+    path = f"cloth_{update.effective_chat.id}.jpg"
     await photo.download_to_drive(path)
-    user_state[update.message.chat_id]["cloth"] = path
-    await update.message.reply_text("Now upload MODEL image 👤")
+    user_state[update.effective_chat.id]["cloth"] = path
+    await update.message.reply_text("📌 Step 2: Upload the MODEL image")
     return STAGE_MODEL
 
 
-async def get_model(update, context):
+async def get_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = await update.message.photo[-1].get_file()
-    path = f"model_{update.message.chat_id}.png"
+    path = f"model_{update.effective_chat.id}.jpg"
     await photo.download_to_drive(path)
-    user_state[update.message.chat_id]["model"] = path
+    user_state[update.effective_chat.id]["model"] = path
+    await update.message.reply_text("⏳ Generating result… Please wait 30–60 sec.")
 
-    await update.message.reply_text("⏳ Generating try-on image... Please wait 30–45s")
+    files = {
+        "garment_image": open(user_state[update.effective_chat.id]["cloth"], "rb"),
+        "person_image": open(user_state[update.effective_chat.id]["model"], "rb"),
+    }
 
-    cloth = open(user_state[update.message.chat_id]["cloth"], "rb").read()
-    model_img = open(user_state[update.message.chat_id]["model"], "rb").read()
+    response = requests.post(HF_API_URL, headers=headers, files=files)
+    result = response.content
 
-    try:
-        output = client.image_to_image(
-            input_image=model_img,
-            prompt="apply the cloth realistically on the person, virtual try-on",
-            model="ovi054/virtual-tryon-kontext-lora",
-            image_guidance=1.1,
-            negative_prompt="blur, distortion, wrong hand, artifacts"
-        )
-    except Exception as e:
-        await update.message.reply_text("❌ Error. Try again later.")
-        print(e)
-        return ConversationHandler.END
-
-    output_bytes = io.BytesIO()
-    output.save(output_bytes, format="PNG")
-    output_bytes.seek(0)
-
-    await update.message.reply_photo(photo=output_bytes)
+    await update.message.reply_photo(result)
     return ConversationHandler.END
 
 
 conv = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
     states={
-        STAGE_CLOTH: [MessageHandler(filters.PHOTO, get_cloth)],
+        STAGE_PRODUCT: [MessageHandler(filters.PHOTO, get_product)],
         STAGE_MODEL: [MessageHandler(filters.PHOTO, get_model)],
     },
     fallbacks=[]
 )
-
 application.add_handler(conv)
 
 
-@app.post("/webhook")
-async def webhook(request: Request):
+# ---------- WEBHOOK ----------
+@app.post("/webhook/{token}")
+async def webhook(request: Request, token: str):
+    if token != TELEGRAM_TOKEN:
+        return {"status": "forbidden"}
+
     data = await request.json()
     update = Update.de_json(data, bot)
     await application.process_update(update)
@@ -98,18 +77,10 @@ async def webhook(request: Request):
 
 @app.get("/")
 def home():
-    return {"status": "OK"}
-
+    return {"status": "BOT RUNNING"}
+    
 
 @app.on_event("startup")
 async def startup():
-    await bot.initialize()
+    await bot.set_webhook(f"{os.getenv('WEBHOOK_URL')}/webhook/{TELEGRAM_TOKEN}")
     await application.initialize()
-    application.bot = bot
-    await application.start()
-    await bot.set_webhook(WEBHOOK_URL)
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await application.stop()
