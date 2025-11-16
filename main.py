@@ -1,5 +1,5 @@
 import os
-import requests
+import aiohttp
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -21,13 +21,13 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Generating image for: {prompt}")
     try:
         url = f"https://image.pollinations.ai/prompt/{prompt}"
-        response = requests.get(url)
-        if response.status_code == 200:
-            with open("temp.jpg", "wb") as f:
-                f.write(response.content)
-            await update.message.reply_photo(photo=open("temp.jpg", "rb"))
-        else:
-            await update.message.reply_text("Sorry, I couldn't generate the image.")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    image_bytes = await response.read()
+                    await update.message.reply_photo(photo=image_bytes)
+                else:
+                    await update.message.reply_text("Sorry, I couldn't generate the image.")
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
