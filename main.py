@@ -3,6 +3,7 @@ import aiohttp
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import urllib.parse
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # e.g., https://your-app.onrender.com/webhook
@@ -20,7 +21,9 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = update.message.text
     await update.message.reply_text(f"Generating image for: {prompt}")
     try:
-        url = f"https://image.pollinations.ai/prompt/{prompt}"
+        # URL-encode the prompt to handle spaces and special characters
+        encoded_prompt = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
@@ -47,6 +50,8 @@ async def telegram_webhook(request: Request):
 # Set webhook on startup
 @app.on_event("startup")
 async def set_webhook():
+    # Remove existing webhook before setting (optional but safer)
+    await bot.delete_webhook()
     await bot.set_webhook(url=WEBHOOK_URL)
 
 # Root endpoint
