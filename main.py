@@ -1,12 +1,16 @@
 import os
 import requests
+import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters
+import logging
+logging.basicConfig(level=logging.INFO)
+
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")   # Your Render service URL + /webhook
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")   # Your Render URL + /webhook
 
 STAGE_PRODUCT, STAGE_MODEL = range(2)
 user_state = {}
@@ -73,3 +77,14 @@ async def webhook(request: Request):
 @app.on_event("startup")
 async def startup():
     await bot.set_webhook(WEBHOOK_URL)
+
+    # Create queue so bot can receive updates
+    application.update_queue = asyncio.Queue()
+
+    # Initialize & start Telegram application
+    await application.initialize()
+    await application.start()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await application.stop()
