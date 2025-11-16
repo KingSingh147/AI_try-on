@@ -1,6 +1,4 @@
 fastapi
 uvicorn
-python-telegram-bot==20.7
-huggingface_hub
-pillow
+python-telegram-bot==20.3
 requests

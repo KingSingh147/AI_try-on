@@ -1,103 +1,47 @@
-import os
-print("Token:", os.getenv("TELEGRAM_TOKEN"))
-
-import requests
 from fastapi import FastAPI, Request
 from telegram import Update, Bot
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+import requests
+import os
 
-# ---- Environment Variables ----
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # <-- MUST be full URL without /webhook/<token>
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+PORT = int(os.environ.get("PORT", 8000))
 
-# ---- HuggingFace Model ----
-HF_API_URL = "https://api-inference.huggingface.co/models/ovi054/virtual-tryon-kontext-lora"
-headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-
-# ---- Telegram Core ----
-bot = Bot(TELEGRAM_TOKEN)
-application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# ---- FastAPI ----
 app = FastAPI()
+bot = Bot(token=BOT_TOKEN)
 
-STAGE_PRODUCT, STAGE_MODEL = range(2)
-user_state = {}
+# Telegram Bot Handlers
 
-
-# ---------- BOT COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.effective_chat.id] = {}
-    await update.message.reply_text("📌 Step 1: Send CLOTH image first")
-    return STAGE_PRODUCT
+    await update.message.reply_text("Hello! Send me a prompt, and I will generate an image for you using Pollinations AI.")
 
+async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = update.message.text
+    await update.message.reply_text(f"Generating image for: {prompt}")
 
-async def get_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = await update.message.photo[-1].get_file()
-    cloth = f"cloth_{update.effective_chat.id}.jpg"
-    await photo.download_to_drive(cloth)
-    user_state[update.effective_chat.id]["cloth"] = cloth
-    await update.message.reply_text("📌 Step 2: Send MODEL image")
-    return STAGE_MODEL
+    try:
+        url = f"https://image.pollinations.ai/prompt/{prompt}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open("temp.jpg", "wb") as f:
+                f.write(response.content)
+            await update.message.reply_photo(photo=open("temp.jpg", "rb"))
+        else:
+            await update.message.reply_text("Sorry, I couldn't generate the image.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
+# Telegram Bot Setup
+application = ApplicationBuilder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image))
 
-async def get_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = await update.message.photo[-1].get_file()
-    model_img = f"model_{update.effective_chat.id}.jpg"
-    await photo.download_to_drive(model_img)
-    user_state[update.effective_chat.id]["model"] = model_img
-
-    await update.message.reply_text("⏳ Please wait 30–60 sec while generating output...")
-
-    files = {
-        "garment_image": open(user_state[update.effective_chat.id]["cloth"], "rb"),
-        "person_image": open(user_state[update.effective_chat.id]["model"], "rb"),
-    }
-
-    response = requests.post(HF_API_URL, headers=headers, files=files)
-    result = response.content
-
-    await update.message.reply_photo(result)
-    return ConversationHandler.END
-
-
-conv = ConversationHandler(
-    entry_points=[CommandHandler("start", start)],
-    states={
-        STAGE_PRODUCT: [MessageHandler(filters.PHOTO, get_product)],
-        STAGE_MODEL: [MessageHandler(filters.PHOTO, get_model)],
-    },
-    fallbacks=[],
-)
-application.add_handler(conv)
-
-
-# ---------- FASTAPI WEBHOOK ----------
-@app.post("/webhook/{token}")
-async def webhook(request: Request, token: str):
-    if token != TELEGRAM_TOKEN:
-        return {"status": "forbidden"}
-
-    data = await request.json()
-    update = Update.de_json(data, bot)
-    await application.process_update(update)
-    return {"ok": True}
-
+# FastAPI routes
+@app.on_event("startup")
+async def on_startup():
+    import asyncio
+    asyncio.create_task(application.run_polling())
 
 @app.get("/")
-def home():
-    return {"status": "BOT IS RUNNING 🚀"}
-
-
-# ---------- STARTUP ----------
-@app.on_event("startup")
-async def startup():
-    await application.initialize()
-    webhook_full = f"{WEBHOOK_URL}/webhook/{TELEGRAM_TOKEN}"
-    await application.bot.set_webhook(webhook_full)
-    await application.start()
-    print("Webhook set to:", webhook_full)
+async def root():
+    return {"status": "Bot is running"}
