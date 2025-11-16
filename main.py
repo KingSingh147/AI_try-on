@@ -14,7 +14,8 @@ HF_API_URL = "https://api-inference.huggingface.co/models/ovi054/virtual-tryon-k
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 bot = Bot(TELEGRAM_TOKEN)
-application = Application.builder().token(TELEGRAM_TOKEN).build()
+application = Application.builder().token(TELEGRAM_TOKEN).updater(None).build()
+
 app = FastAPI()
 
 
@@ -82,5 +83,6 @@ def home():
 
 @app.on_event("startup")
 async def startup():
-    await bot.set_webhook(f"{os.getenv('WEBHOOK_URL')}/webhook/{TELEGRAM_TOKEN}")
     await application.initialize()
+    await bot.set_webhook(f"{os.getenv('WEBHOOK_URL')}/webhook/{TELEGRAM_TOKEN}")
+    await application.start()
