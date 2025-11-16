@@ -36,6 +36,7 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Set up Telegram application
 application = ApplicationBuilder().token(BOT_TOKEN).build()
+
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image))
 
@@ -50,6 +51,8 @@ async def telegram_webhook(request: Request):
 # Set webhook on startup
 @app.on_event("startup")
 async def set_webhook():
+    await application.initialize()
+    await application.start()
     # Remove existing webhook before setting (optional but safer)
     await bot.delete_webhook()
     await bot.set_webhook(url=WEBHOOK_URL)
@@ -58,3 +61,8 @@ async def set_webhook():
 @app.get("/")
 async def root():
     return {"status": "Bot is running"}
+
+@app.on_event("shutdown")
+async def shutdown():
+    await application.stop()
+    await application.shutdown()
