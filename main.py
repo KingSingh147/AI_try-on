@@ -74,16 +74,27 @@ async def webhook(request: Request):
     await application.update_queue.put(update)
     return {"ok": True}
 
+@app.get("/")
+def home():
+    return {"status": "OK"}
+
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, bot)
+    await application.process_update(update)
+    return {"ok": True}
+
+
 @app.on_event("startup")
 async def startup():
+    await bot.initialize()
+    await application.initialize()
+    application.bot = bot
+    await application.start()
     await bot.set_webhook(WEBHOOK_URL)
 
-    # Create queue so bot can receive updates
-    application.update_queue = asyncio.Queue()
-
-    # Initialize & start Telegram application
-    await application.initialize()
-    await application.start()
 
 @app.on_event("shutdown")
 async def shutdown():
