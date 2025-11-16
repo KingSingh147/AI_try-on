@@ -84,5 +84,5 @@ def home():
 @app.on_event("startup")
 async def startup():
     await application.initialize()
-    await bot.set_webhook(f"{os.getenv('WEBHOOK_URL')}/webhook/{TELEGRAM_TOKEN}")
+    await application.bot.set_webhook(f"{os.getenv('WEBHOOK_URL')}/webhook/{TELEGRAM_TOKEN}")
     await application.start()
