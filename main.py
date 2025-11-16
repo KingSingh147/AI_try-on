@@ -1,88 +1,89 @@
 import os
+import logging
 import requests
+import uvicorn
 from fastapi import FastAPI, Request
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Example: https://parsel-tracking.onrender.com
+INDIAN_TRACKING_API = "https://indiantracking.in/api/track?courier=india-post&awb="
 
-STAGE_PRODUCT, STAGE_MODEL = range(2)
-user_state = {}
-
-HF_API_URL = "https://api-inference.huggingface.co/models/ovi054/virtual-tryon-kontext-lora"
-headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-
-bot = Bot(TELEGRAM_TOKEN)
-application = Application.builder().token(TELEGRAM_TOKEN).updater(None).build()
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 
+telegram_app = (
+    Application.builder()
+    .token(TOKEN)
+    .build()
+)
+
+# ------------------------
+# BOT HANDLERS
+# ------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.effective_chat.id] = {}
-    await update.message.reply_text("📌 Step 1: Upload the CLOTH image")
-    return STAGE_PRODUCT
+    await update.message.reply_text("📦 Send any India Post tracking number to check parcel status.")
 
 
-async def get_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = await update.message.photo[-1].get_file()
-    path = f"cloth_{update.effective_chat.id}.jpg"
-    await photo.download_to_drive(path)
-    user_state[update.effective_chat.id]["cloth"] = path
-    await update.message.reply_text("📌 Step 2: Upload the MODEL image")
-    return STAGE_MODEL
+async def track_parcel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tracking = update.message.text.strip()
+    response = requests.get(INDIAN_TRACKING_API + tracking).json()
+
+    if not response.get("success"):
+        await update.message.reply_text("❌ Tracking number not found.")
+        return
+
+    data = response.get("data", {})
+    msg = f"""📦 *India Post Tracking*
+
+🟢 *Status:* {data.get('current_status', 'Not available')}
+📍 *Location:* {data.get('current_location', 'Not available')}
+🕒 *Date/Time:* {data.get('current_datetime', 'Not available')}
+
+🔍 *Tracking:* `{tracking}`
+"""
+    await update.message.reply_markdown(msg)
 
 
-async def get_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = await update.message.photo[-1].get_file()
-    path = f"model_{update.effective_chat.id}.jpg"
-    await photo.download_to_drive(path)
-    user_state[update.effective_chat.id]["model"] = path
-    await update.message.reply_text("⏳ Generating result… Please wait 30–60 sec.")
-
-    files = {
-        "garment_image": open(user_state[update.effective_chat.id]["cloth"], "rb"),
-        "person_image": open(user_state[update.effective_chat.id]["model"], "rb"),
-    }
-
-    response = requests.post(HF_API_URL, headers=headers, files=files)
-    result = response.content
-
-    await update.message.reply_photo(result)
-    return ConversationHandler.END
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, track_parcel))
 
 
-conv = ConversationHandler(
-    entry_points=[CommandHandler("start", start)],
-    states={
-        STAGE_PRODUCT: [MessageHandler(filters.PHOTO, get_product)],
-        STAGE_MODEL: [MessageHandler(filters.PHOTO, get_model)],
-    },
-    fallbacks=[]
-)
-application.add_handler(conv)
+# ------------------------
+# START BOT + WEBHOOK
+# ------------------------
+@app.on_event("startup")
+async def startup():
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    print("🚀 Bot started & webhook set")
 
 
-# ---------- WEBHOOK ----------
-@app.post("/webhook/{token}")
-async def webhook(request: Request, token: str):
-    if token != TELEGRAM_TOKEN:
-        return {"status": "forbidden"}
+@app.on_event("shutdown")
+async def shutdown():
+    await telegram_app.stop()
+    await telegram_app.shutdown()
 
+
+# ------------------------
+# WEBHOOK ENDPOINT
+# ------------------------
+@app.post("/webhook")
+async def webhook_listener(request: Request):
     data = await request.json()
-    update = Update.de_json(data, bot)
-    await application.process_update(update)
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
     return {"ok": True}
 
 
 @app.get("/")
-def home():
-    return {"status": "BOT RUNNING"}
-    
+async def home():
+    return {"status": "Bot running via webhook 🔥"}
 
-@app.on_event("startup")
-async def startup():
-    await application.initialize()
-    await application.bot.set_webhook(f"{os.getenv('WEBHOOK_URL')}/webhook/{TELEGRAM_TOKEN}")
-    await application.start()
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
